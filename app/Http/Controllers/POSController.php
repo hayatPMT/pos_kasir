@@ -40,7 +40,7 @@ class POSController extends Controller
         return view('pos.index', compact('categories', 'products', 'members', 'promotions'));
     }
 
-    public function store(Request $request): \Illuminate\Http\RedirectResponse
+    public function store(Request $request)
     {
         $validated = $request->validate([
             'items' => 'required|array',
@@ -53,19 +53,32 @@ class POSController extends Controller
         ]);
 
         try {
-            // Add required fields for service
             $data = $validated;
             $data['branch_id'] = \Illuminate\Support\Facades\Auth::user()->branch_id;
             $data['user_id'] = \Illuminate\Support\Facades\Auth::id();
 
-            // Service handles calculations and transaction creation
             $transaction = $this->transactionService->createTransaction($data);
+            $transaction->load(['details.product', 'member', 'user', 'branch']);
 
-            return redirect()->route('pos.index')->with('success', 'Transaction completed! Invoice: '.$transaction->invoice_number);
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'success' => true,
+                    'message' => 'Transaction settled!',
+                    'data' => $transaction
+                ]);
+            }
+
+            return redirect()->route('pos.index')->with('success', 'Transaction completed! Invoice: ' . $transaction->invoice_number);
         } catch (\Illuminate\Validation\ValidationException $e) {
+            if ($request->wantsJson()) {
+                return response()->json(['success' => false, 'errors' => $e->errors()], 422);
+            }
             return back()->withErrors($e->errors());
         } catch (\Exception $e) {
-            return back()->withErrors(['error' => 'Failed to process transaction: '.$e->getMessage()]);
+            if ($request->wantsJson()) {
+                return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            }
+            return back()->withErrors(['error' => 'Failed to process transaction: ' . $e->getMessage()]);
         }
     }
 }
