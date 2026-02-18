@@ -4,7 +4,6 @@
 @section('page_title', 'Point of Sale')
 
 @section('content')
-@include('pos._print_template')
 <div class="h-[calc(100vh-12rem)] flex flex-col lg:flex-row gap-6">
     <!-- LEFT: PRODUCT CATALOG -->
     <div class="flex-1 min-w-0 flex flex-col bg-white rounded-[2.5rem] shadow-premium border border-slate-100 overflow-hidden">
@@ -36,7 +35,7 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6">
                 @forelse ($products as $product)
                 <button type="button"
-                    onclick="addToCart({{ json_encode($product) }})"
+                    onclick='addToCart(@json($product))'
                     class="group bg-white rounded-3xl border border-slate-100 p-6 text-left transition-all duration-300 hover:shadow-xl hover:shadow-indigo-500/5 hover:border-indigo-100 active:scale-[0.98] flex flex-col min-h-[300px] relative">
 
                     @if ($product->stock <= $product->min_stock)
@@ -240,10 +239,47 @@
 
     function calculateTotal() {
         const subtotal = cart.reduce((s, i) => s + (i.price * i.quantity), 0);
+        const total = subtotal;
         document.getElementById('display-subtotal').innerText = 'Rp ' + fmt.format(subtotal);
-        document.getElementById('display-total').innerText = 'Rp ' + fmt.format(subtotal);
-        document.getElementById('display-total').dataset.val = subtotal;
+        document.getElementById('display-total').innerText = 'Rp ' + fmt.format(total);
+        document.getElementById('display-total').dataset.val = total;
+
+        const method = document.querySelector('select[name="payment_method"]').value;
+        if (method === 'qris' || method === 'transfer') {
+            document.getElementById('pay_amount').value = total;
+        }
+
         calculateChange();
+        syncWithDisplay(subtotal, total);
+    }
+
+    document.querySelector('select[name="payment_method"]').addEventListener('change', function(e) {
+        if (e.target.value === 'qris' || e.target.value === 'transfer') {
+            const total = document.getElementById('display-total').dataset.val;
+            document.getElementById('pay_amount').value = total;
+            calculateChange();
+        }
+    });
+
+    async function syncWithDisplay(subtotal, total) {
+        try {
+            await fetch('{{ route("pos.display.sync") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify({
+                    items: cart,
+                    subtotal: subtotal,
+                    total: total,
+                    status: cart.length > 0 ? 'active' : 'idle'
+                })
+            });
+        } catch (err) {
+            console.error('Display sync failed', err);
+        }
     }
 
     function calculateChange() {
@@ -260,8 +296,12 @@
         setTimeout(() => t.remove(), 3000);
     }
 
+    let currentQRISInvoice = null;
+    let pollingInterval = null;
+
     // Modal Receipt Logic
     function showReceiptModal(data) {
+        document.getElementById('receipt-modal').classList.remove('hidden');
         document.getElementById('print-invoice').innerText = '#' + data.invoice_number;
         document.getElementById('print-date').innerText = new Date(data.created_at).toLocaleString('id-ID');
         document.getElementById('print-subtotal').innerText = 'Rp ' + fmt.format(data.subtotal);
@@ -284,8 +324,65 @@
             `;
             itemsBox.appendChild(row);
         });
+    }
 
-        document.getElementById('receipt-modal').classList.remove('hidden');
+    function showQRISModal(qris, transaction) {
+        currentQRISInvoice = qris.invoice;
+        document.getElementById('qris-total').innerText = 'Rp ' + fmt.format(qris.amount);
+        document.getElementById('qris-image').src = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qris.qr_string)}`;
+        document.getElementById('qris-modal').classList.remove('hidden');
+
+        // Start Polling
+        startPolling();
+    }
+
+    function startPolling() {
+        if (pollingInterval) clearInterval(pollingInterval);
+        pollingInterval = setInterval(async () => {
+            try {
+                const resp = await fetch(`/pos/qris/status/${currentQRISInvoice}`);
+                const res = await resp.json();
+                if (res.status === 'completed') {
+                    stopPolling();
+                    document.getElementById('qris-modal').classList.add('hidden');
+                    showToast('QRIS Payment Settled!');
+                    showReceiptModal(res.data);
+                }
+            } catch (err) {
+                console.error('Polling error', err);
+            }
+        }, 3000);
+    }
+
+    function stopPolling() {
+        if (pollingInterval) clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+
+    async function simulateQRISSuccess() {
+        try {
+            await fetch('/pos/qris/simulate-success', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                },
+                body: JSON.stringify({
+                    invoice: currentQRISInvoice
+                })
+            });
+            showToast('Simulating payment success...');
+        } catch (err) {
+            showToast('Simulation failed', 'error');
+        }
+    }
+
+    function cancelQRIS() {
+        if (confirm('Cancel this pending QRIS session?')) {
+            stopPolling();
+            document.getElementById('qris-modal').classList.add('hidden');
+            showToast('Transaction Cancelled', 'error');
+        }
     }
 
     function closeReceiptModal() {
@@ -308,6 +405,7 @@
         }
 
         const formData = new FormData(e.target);
+        const method = formData.get('payment_method');
 
         try {
             const resp = await fetch('{{ route("pos.store") }}', {
@@ -321,8 +419,12 @@
 
             const res = await resp.json();
             if (res.success) {
-                showToast('Transaction Successful');
-                showReceiptModal(res.data);
+                if (method === 'qris') {
+                    showQRISModal(res.qris, res.data);
+                } else {
+                    showToast('Transaction Successful');
+                    showReceiptModal(res.data);
+                }
             } else {
                 showToast(res.message || 'Transaction Failed', 'error');
             }
@@ -346,4 +448,43 @@
         box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.05);
     }
 </style>
+@section('modals')
+@include('pos._print_template')
+
+<!-- QRIS Modal -->
+<div id="qris-modal" class="fixed inset-0 z-[9999] hidden overflow-y-auto">
+    <div class="fixed inset-0 bg-slate-950/90 backdrop-blur-md"></div>
+    <div class="relative min-h-screen flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-sm rounded-[3rem] shadow-2xl overflow-hidden animate-in zoom-in duration-500">
+            <div class="p-10 text-center">
+                <div class="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-8 border border-indigo-100 shadow-xl shadow-indigo-500/10">
+                    <svg class="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v1m0 11v1m4-8h1m-11 0h1m3-4h.01M9 16h.01m1.99-7h.01M12 12h.01M15 12h.01M15 15h.01M12 18h.01M9 12h.01m5.99-7h.01M12 12h.01"></path>
+                    </svg>
+                </div>
+                <h3 class="text-2xl font-black text-slate-900 tracking-tight mb-2">Scan QRIS</h3>
+                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-8">Waiting for payment settlement...</p>
+
+                <div class="aspect-square bg-slate-50 rounded-[2rem] border-4 border-slate-100 p-8 mb-8 relative group">
+                    <img id="qris-image" src="" class="w-full h-full object-contain mix-blend-multiply opacity-80 group-hover:scale-105 transition-transform">
+                    <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-white/20 backdrop-blur-[2px] rounded-[2rem]">
+                        <span class="bg-indigo-600 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-xl">Scan Active</span>
+                    </div>
+                </div>
+
+                <div class="space-y-4">
+                    <div class="p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
+                        <p class="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-1">Payable Amount</p>
+                        <p class="text-2xl font-black text-indigo-600 tracking-tighter" id="qris-total">Rp 0</p>
+                    </div>
+
+                    <button onclick="simulateQRISSuccess()" class="w-full py-4 text-slate-400 hover:text-indigo-600 text-[10px] font-black uppercase tracking-[0.2em] transition-all">Simulate Payment (Demo)</button>
+                </div>
+            </div>
+
+            <button onclick="cancelQRIS()" class="w-full bg-slate-100 py-6 text-slate-500 font-black uppercase tracking-widest text-[10px] hover:bg-rose-50 hover:text-rose-500 transition-all">Cancel Transaction</button>
+        </div>
+    </div>
+</div>
+@endsection
 @endsection

@@ -75,7 +75,7 @@ class TransactionService
             $payAmount = $data['pay_amount'];
             $changeAmount = $payAmount - $total;
 
-            if ($changeAmount < 0) {
+            if ($changeAmount < 0 && $data['payment_method'] !== 'qris') {
                 throw ValidationException::withMessages(['pay_amount' => 'Insufficient payment.']);
             }
 
@@ -91,8 +91,8 @@ class TransactionService
                 'discount' => $discount,
                 'total' => $total,
                 'pay_amount' => $payAmount,
-                'change_amount' => $changeAmount,
-                'status' => 'completed',
+                'change_amount' => max(0, $changeAmount),
+                'status' => $data['status'] ?? 'completed',
                 'notes' => $data['notes'] ?? null,
             ]);
 
@@ -103,6 +103,7 @@ class TransactionService
                     'product_id' => $detail['product']->id,
                     'quantity' => $detail['quantity'],
                     'price' => $detail['price'],
+                    'purchase_price' => $detail['product']->buy_price,
                     'subtotal' => $detail['line_total'],
                 ]);
 

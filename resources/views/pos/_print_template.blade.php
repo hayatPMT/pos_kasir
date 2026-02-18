@@ -1,4 +1,4 @@
-<div id="receipt-modal" class="fixed inset-0 z-[100] hidden overflow-y-auto">
+<div id="receipt-modal" class="fixed inset-0 z-[9999] hidden overflow-y-auto">
  <div class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm"></div>
  <div class="relative min-h-screen flex items-center justify-center p-4">
   <div class="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in duration-300">
