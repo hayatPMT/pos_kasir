@@ -72,11 +72,44 @@ class TransactionService
 
             $total = $subtotal + $tax - $discount;
 
+            // Loyalty Points Logic
+            $pointsEarned = 0;
+            $pointsRedeemed = $data['points_redeemed'] ?? 0;
+            $pointsDiscount = 0;
+
+            if (isset($data['member_id']) && $data['member_id']) {
+                $member = \App\Models\Member::findOrFail($data['member_id']);
+
+                // Handling Redemption
+                if ($pointsRedeemed > 0) {
+                    if ($member->points < $pointsRedeemed) {
+                        throw ValidationException::withMessages(['points_redeemed' => 'Insufficient loyalty points.']);
+                    }
+
+                    // 1 point = Rp 100 discount (configurable)
+                    $pointsDiscount = $pointsRedeemed * 100;
+
+                    // Don't allow discount to exceed total
+                    if ($pointsDiscount > $total) {
+                        $pointsDiscount = $total;
+                        // Recalculate points to deduct if capped
+                        $pointsRedeemed = ceil($pointsDiscount / 100);
+                    }
+
+                    $total -= $pointsDiscount;
+                    $member->decrement('points', $pointsRedeemed);
+                }
+
+                // Points earned: 1 point per Rp 10.000 spent (after all discounts)
+                $pointsEarned = floor($total / 10000);
+                $member->increment('points', $pointsEarned);
+            }
+
             $payAmount = $data['pay_amount'];
             $changeAmount = $payAmount - $total;
 
-            if ($changeAmount < 0 && $data['payment_method'] !== 'qris') {
-                throw ValidationException::withMessages(['pay_amount' => 'Insufficient payment.']);
+            if ($changeAmount < 0 && ! in_array($data['payment_method'], ['qris', 'transfer'])) {
+                throw ValidationException::withMessages(['pay_amount' => 'Insufficient payment. Amount due: Rp'.number_format($total, 0, ',', '.')]);
             }
 
             // 3. Create Transaction
@@ -89,6 +122,9 @@ class TransactionService
                 'subtotal' => $subtotal,
                 'tax' => $tax,
                 'discount' => $discount,
+                'points_earned' => $pointsEarned,
+                'points_redeemed' => $pointsRedeemed,
+                'points_discount' => $pointsDiscount,
                 'total' => $total,
                 'pay_amount' => $payAmount,
                 'change_amount' => max(0, $changeAmount),

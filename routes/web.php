@@ -29,6 +29,7 @@ Route::middleware(['auth'])->group(function () {
     // POS
     Route::get('/pos', [POSController::class, 'index'])->name('pos.index');
     Route::post('/pos/transaction', [POSController::class, 'store'])->name('pos.store');
+    Route::get('/kiosk', [\App\Http\Controllers\POSController::class, 'kiosk'])->name('pos.kiosk');
 
     // Master Data
     Route::resource('products', ProductController::class);
@@ -41,6 +42,7 @@ Route::middleware(['auth'])->group(function () {
     // Reporting
     Route::get('/reports', [ReportController::class, 'index'])->name('reports.index');
     Route::get('/reports/export', [ReportController::class, 'exportCsv'])->name('reports.export');
+    Route::get('/analytics', \App\Http\Controllers\AnalyticsController::class)->name('analytics.index');
 
     // Shift Management
     Route::get('/shifts', [ShiftController::class, 'index'])->name('shifts.index');
@@ -58,5 +60,12 @@ Route::middleware(['auth'])->group(function () {
     Route::post('/pos/display/sync', [POSController::class, 'syncDisplayData'])->name('pos.display.sync');
 
     Route::get('/settings', [SettingController::class, 'index'])->name('settings.index');
+    // Inventory Lanjutan
+    Route::resource('suppliers', \App\Http\Controllers\SupplierController::class);
+    Route::resource('purchase-orders', \App\Http\Controllers\PurchaseOrderController::class);
+    Route::post('purchase-orders/{purchase_order}/receive', [\App\Http\Controllers\PurchaseOrderController::class, 'receive'])->name('purchase-orders.receive');
+    Route::resource('stock-opnames', \App\Http\Controllers\StockOpnameController::class);
+    Route::post('stock-opnames/{stock_opname}/complete', [\App\Http\Controllers\StockOpnameController::class, 'complete'])->name('stock-opnames.complete');
+
     Route::post('/settings', [SettingController::class, 'update'])->name('settings.update');
 });

@@ -20,6 +20,9 @@ class Transaction extends Model
         'change_amount',
         'status',
         'notes',
+        'points_earned',
+        'points_redeemed',
+        'points_discount',
     ];
 
     protected function casts(): array

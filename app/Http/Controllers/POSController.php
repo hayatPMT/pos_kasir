@@ -53,6 +53,14 @@ class POSController extends Controller
         return view('pos.index', compact('categories', 'products', 'members', 'promotions'));
     }
 
+    public function kiosk(Request $request): \Illuminate\View\View
+    {
+        $categories = \App\Models\Category::all();
+        $products = \App\Models\Product::where('is_active', true)->get();
+
+        return view('pos.kiosk', compact('categories', 'products'));
+    }
+
     public function store(Request $request)
     {
         // Absolute requirement: Active Shift

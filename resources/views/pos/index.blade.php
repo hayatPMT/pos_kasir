@@ -35,7 +35,8 @@
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6">
                 @forelse ($products as $product)
                 <button type="button"
-                    onclick='addToCart(@json($product))'
+                    data-product="{{ e(json_encode($product)) }}"
+                    onclick='addToCart(JSON.parse(this.dataset.product))'
                     class="group bg-white rounded-3xl border border-slate-100 p-6 text-left transition-all duration-300 hover:shadow-xl hover:shadow-indigo-500/5 hover:border-indigo-100 active:scale-[0.98] flex flex-col min-h-[300px] relative">
 
                     @if ($product->stock <= $product->min_stock)
@@ -107,12 +108,20 @@
                     <div class="grid grid-cols-2 gap-4">
                         <div class="space-y-1.5">
                             <label class="text-[9px] font-black text-slate-400 uppercase tracking-widest pl-1">Membership</label>
-                            <select name="member_id" class="w-full px-4 py-3 bg-white rounded-xl border border-slate-100 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500/20">
+                            <select name="member_id" id="member_select" onchange="updateMemberPoints()" class="w-full px-4 py-3 bg-white rounded-xl border border-slate-100 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500/20">
                                 <option value="">Guest/General</option>
                                 @foreach ($members as $member)
-                                <option value="{{ $member->id }}">{{ $member->name }}</option>
+                                <option value="{{ $member->id }}" data-points="{{ $member->points }}">{{ $member->name }} ({{ number_format($member->points) }} pts)</option>
                                 @endforeach
                             </select>
+                        </div>
+                        <div class="space-y-1.5" id="points-container" style="display: none;">
+                            <label class="text-[9px] font-black text-rose-500 uppercase tracking-widest pl-1">Redeem Points</label>
+                            <div class="relative">
+                                <input type="number" name="points_redeemed" id="points_redeemed" value="0" min="0" oninput="calculateTotal()"
+                                    class="w-full px-4 py-3 bg-rose-50 rounded-xl border border-rose-100 text-xs font-black text-rose-600 outline-none focus:ring-2 focus:ring-rose-500/20">
+                                <span class="absolute right-4 top-1/2 -translate-y-1/2 text-[9px] font-black text-rose-400 uppercase">Max: <span id="max-points">0</span></span>
+                            </div>
                         </div>
                         <div class="space-y-1.5">
                             <label class="text-[9px] font-black text-slate-400 uppercase tracking-widest pl-1">Payment</label>
@@ -237,10 +246,36 @@
         calculateTotal();
     }
 
+    function updateMemberPoints() {
+        const select = document.getElementById('member_select');
+        const container = document.getElementById('points-container');
+        const selectedOption = select.options[select.selectedIndex];
+
+        if (selectedOption.value) {
+            container.style.display = 'block';
+            document.getElementById('max-points').innerText = selectedOption.dataset.points;
+            document.getElementById('points_redeemed').max = selectedOption.dataset.points;
+        } else {
+            container.style.display = 'none';
+            document.getElementById('points_redeemed').value = 0;
+        }
+        calculateTotal();
+    }
+
     function calculateTotal() {
         const subtotal = cart.reduce((s, i) => s + (i.price * i.quantity), 0);
-        const total = subtotal;
+
+        // Point Redemption (1 point = Rp 100)
+        const pts = parseInt(document.getElementById('points_redeemed').value) || 0;
+        const pointDiscount = pts * 100;
+
+        const total = Math.max(0, subtotal - pointDiscount);
+
         document.getElementById('display-subtotal').innerText = 'Rp ' + fmt.format(subtotal);
+        if (pointDiscount > 0) {
+            document.getElementById('display-subtotal').innerHTML += `<p class="text-[9px] text-rose-500 mt-1 uppercase font-black tracking-widest">- Rp${fmt.format(pointDiscount)} Points Redeemed</p>`;
+        }
+
         document.getElementById('display-total').innerText = 'Rp ' + fmt.format(total);
         document.getElementById('display-total').dataset.val = total;
 
@@ -248,9 +283,7 @@
         if (method === 'qris' || method === 'transfer') {
             document.getElementById('pay_amount').value = total;
         }
-
         calculateChange();
-        syncWithDisplay(subtotal, total);
     }
 
     document.querySelector('select[name="payment_method"]').addEventListener('change', function(e) {
@@ -299,22 +332,25 @@
     let currentQRISInvoice = null;
     let pollingInterval = null;
 
-    // Modal Receipt Logic
-    function showReceiptModal(data) {
+    let lastTransaction = null;
+
+    function showReceiptModal(transaction) {
+        lastTransaction = transaction;
         document.getElementById('receipt-modal').classList.remove('hidden');
-        document.getElementById('print-invoice').innerText = '#' + data.invoice_number;
-        document.getElementById('print-date').innerText = new Date(data.created_at).toLocaleString('id-ID');
-        document.getElementById('print-subtotal').innerText = 'Rp ' + fmt.format(data.subtotal);
-        document.getElementById('print-total').innerText = 'Rp ' + fmt.format(data.total);
-        document.getElementById('print-paid').innerText = 'Rp ' + fmt.format(data.pay_amount);
-        document.getElementById('print-change').innerText = 'Rp ' + fmt.format(data.change_amount);
-        document.getElementById('print-method').innerText = data.payment_method || 'CASH';
+        document.getElementById('print-invoice').innerText = '#' + transaction.invoice_number;
+        document.getElementById('print-date').innerText = new Date(transaction.created_at).toLocaleString();
+        document.getElementById('print-subtotal').innerText = 'Rp ' + fmt.format(transaction.subtotal);
+        document.getElementById('print-discount').innerText = '-Rp ' + fmt.format(parseFloat(transaction.discount) + parseFloat(transaction.points_discount));
+        document.getElementById('print-total').innerText = 'Rp ' + fmt.format(transaction.total);
+        document.getElementById('print-paid').innerText = 'Rp ' + fmt.format(transaction.pay_amount);
+        document.getElementById('print-change').innerText = 'Rp ' + fmt.format(transaction.change_amount);
+        document.getElementById('print-method').innerText = transaction.payment_method.toUpperCase();
 
         const itemsBox = document.getElementById('print-items');
         itemsBox.innerHTML = '';
-        data.details.forEach(it => {
+        transaction.details.forEach(it => {
             const row = document.createElement('div');
-            row.className = 'flex justify-between items-start';
+            row.className = 'flex justify-between items-start text-[10px]';
             row.innerHTML = `
                 <div class="flex-1">
                     <p class="font-bold uppercase">${it.product.name}</p>
@@ -324,6 +360,16 @@
             `;
             itemsBox.appendChild(row);
         });
+    }
+
+    function shareWhatsApp() {
+        if (!lastTransaction) return;
+        const msg = `🧾 *RECEIPT: ${lastTransaction.invoice_number}*\n` +
+            `Total: Rp ${fmt.format(lastTransaction.total)}\n` +
+            `Items: ${lastTransaction.details.length} items purchased.\n\n` +
+            `Thank you for shopping at ${window.location.hostname}`;
+
+        window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank');
     }
 
     function showQRISModal(qris, transaction) {
